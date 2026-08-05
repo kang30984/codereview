@@ -1,0 +1,30 @@
+{
+  "name": "ollama-mcp-server",
+  "version": "1.1.0",
+  "description": "Modern MCP server for Ollama – rebooted and actively maintained.",
+  "license": "MIT",
+  "repository": "github:hyzhak/ollama-mcp-server",
+  "keywords": ["ollama", "mcp", "ai", "chatbot"],
+  "type": "module",
+  "bin": {
+    "ollama-mcp-server": "./build/index.js"
+  },
+  "files": [
+    "build"
+  ],
+  "scripts": {
+    "build": "tsc && node -e \"import('node:fs').then(fs => fs.chmodSync('build/index.js', '755'))\"",
+    "prepare": "npm run build",
+    "watch": "tsc --watch",
+    "inspector": "npx @modelcontextprotocol/inspector build/index.js",
+    "test": "echo \"No tests yet\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.13.0",
+    "ollama": "^0.5.16"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "typescript": "^5.3.3"
+  }
+}

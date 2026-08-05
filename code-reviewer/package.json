@@ -1,0 +1,22 @@
+{
+  "name": "code-reviewer",
+  "version": "1.0.0",
+  "description": "Ollama 로컬 LLM 기반 소스코드 보안 취약점 자동 분석 스크립트",
+  "main": "reviewer.js",
+  "type": "module",
+  "scripts": {
+    "start": "node reviewer.js",
+    "start:env": "node --env-file=../.env reviewer.js"
+  },
+  "keywords": ["security", "static-analysis", "ollama", "llm", "code-review"],
+  "license": "ISC",
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "dependencies": {
+    "@langchain/community": "^1.1.27",
+    "axios": "^1.15.2",
+    "langchain": "^1.3.4",
+    "ollama": "^0.6.3"
+  }
+}
