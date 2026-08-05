@@ -53,8 +53,7 @@ ollama serve
 ## 설치 및 실행
 
 ```bash
-git clone https://github.com/<your-account>/AI-APP-CODE.git
-cd AI-APP-CODE
+git clone https://github.com/kang30984/codereview.git
 
 # 1) 환경변수 설정
 cp .env.example .env
