@@ -1,0 +1,42 @@
+# 의존성
+node_modules/
+.pnp
+.pnp.js
+
+# 환경변수 / 시크릿
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# 분석 대상 소스코드 (분석할 프로젝트를 여기에 넣습니다)
+code-reviewer/target_dir/*
+!code-reviewer/target_dir/.gitkeep
+
+# 실행 산출물 (리포트 / 로그)
+audit_report.json
+analysis_status.log
+analysis_debug.log
+*.log
+
+# 에디터 확장 패키지 등 대용량 바이너리
+*.vsix
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
+# 빌드 산출물
+dist/
+out/
+target/
+coverage/
+
+# OS / 에디터
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
