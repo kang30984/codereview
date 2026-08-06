@@ -88,7 +88,7 @@ node --env-file=../.env reviewer.js
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `SLACK_WEBHOOK_URL` | `https://hooks.slack.com/services/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` | Slack Incoming Webhook URL. 비어 있으면 알림 전송을 건너뜁니다. |
+| `SLACK_WEBHOOK_URL` | | Slack Incoming Webhook URL. 비어 있으면 알림 전송을 건너뜁니다. |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama 서버 주소 |
 | `OLLAMA_MODEL` | `qwen2.5-coder:7b` | 분석에 사용할 모델 |
 | `TARGET_DIR` | `./target_dir` | 분석 대상 디렉터리 |
