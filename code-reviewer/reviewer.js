@@ -17,8 +17,19 @@ const TARGET_DIR = process.env.TARGET_DIR || './target_dir';
 const REPORT_FILE = 'audit_report.json';
 const LOG_FILE = 'analysis_status.log';
 const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL || '';
-// main 디렉터리 경로 강제 여부. 레거시 구조(src/com/..., WebContent/)는 0으로 설정합니다.
-const REQUIRE_MAIN_PATH = process.env.REQUIRE_MAIN_PATH !== '0';
+// main 디렉터리 경로 필터 모드. (기본값: auto)
+//   auto : TARGET_DIR 을 스캔해 표준 구조(main 존재)/레거시 구조를 자동으로 판별합니다.
+//   1    : 항상 경로에 'main' 이 있는 파일만 분석 (Maven/Gradle 표준 구조 강제)
+//   0    : 항상 전체 소스를 분석 (레거시 구조 강제)
+const REQUIRE_MAIN_PATH_MODE = (() => {
+    const raw = (process.env.REQUIRE_MAIN_PATH ?? 'auto').trim().toLowerCase();
+    if (raw === '1' || raw === 'true') return 'force-on';
+    if (raw === '0' || raw === 'false') return 'force-off';
+    return 'auto';
+})();
+// 레거시 구조에서 테스트 코드를 분석 대상에서 제외할지 여부. (기본: 제외)
+// 표준 구조는 src/main 필터만으로 src/test 가 자연히 빠지지만, 레거시 구조는 그렇지 않습니다.
+const EXCLUDE_TEST_PATHS = process.env.EXCLUDE_TEST_PATHS !== '0';
 // 리포트를 TARGET_DIR 안에도 복사할지 여부. 기본은 비활성(취약점 상세 유출 방지).
 const COPY_REPORT_TO_TARGET = process.env.COPY_REPORT_TO_TARGET === '1';
 
@@ -83,6 +94,52 @@ if (fs.existsSync(LOG_FILE)) {
 logger.step('보안 분석 스크립트 엔진 가동 시작');
 
 const ALLOWED_EXTENSIONS = ['.js', '.css', '.html', '.jsp', '.sql', '.java', '.xml'];
+// 실제 보안 분석 대상 확장자
+const SOURCE_EXTENSIONS = ['.java', '.jsp', '.sql'];
+// 탐색 시 건너뛸 디렉터리 (빌드 산출물/의존성은 분석 의미가 없고 오탐만 늘립니다)
+const IGNORED_DIRS = new Set(['node_modules', '.git', '.svn', 'dist', 'target', 'build', 'bin', 'out', '.idea', '.settings']);
+// 레거시 구조에서 테스트 코드로 간주할 디렉터리명
+const TEST_DIR_NAMES = new Set(['test', 'tests', 'testcase', 'testcases', '__tests__']);
+
+/** TARGET_DIR 기준 상대 경로의 디렉터리 세그먼트 배열을 반환합니다. */
+function relSegments(file) {
+    return path.relative(TARGET_DIR, file).split(path.sep);
+}
+
+/** 경로에 'main' 디렉터리가 포함되어 있는지 (Maven/Gradle 표준 구조 여부) */
+function isUnderMainDir(file) {
+    return relSegments(file).includes('main');
+}
+
+/** 경로가 테스트 코드로 보이는지 */
+function isTestPath(file) {
+    return relSegments(file).some(seg => TEST_DIR_NAMES.has(seg.toLowerCase()));
+}
+
+/**
+ * 프로젝트 구조를 판별합니다.
+ * main 디렉터리가 "있는 경우"와 "없는 경우"를 구분해 필터 정책을 결정합니다.
+ */
+function detectProjectLayout(allFiles) {
+    const candidates = allFiles.filter(f => SOURCE_EXTENSIONS.includes(path.extname(f).toLowerCase()));
+    const mainFiles = candidates.filter(isUnderMainDir);
+    const outsideMain = candidates.length - mainFiles.length;
+
+    let requireMain;
+    let layout;
+    if (REQUIRE_MAIN_PATH_MODE === 'force-on') {
+        requireMain = true;
+        layout = 'standard(강제)';
+    } else if (REQUIRE_MAIN_PATH_MODE === 'force-off') {
+        requireMain = false;
+        layout = 'legacy(강제)';
+    } else {
+        // auto: main 아래에 소스가 하나라도 있으면 표준 구조로 간주
+        requireMain = mainFiles.length > 0;
+        layout = requireMain ? 'standard(자동판별)' : 'legacy(자동판별)';
+    }
+    return { requireMain, layout, candidates, mainFiles, outsideMain };
+}
 
 // [Preflight] Ollama 서버 연결 및 모델 존재 여부를 먼저 확인합니다.
 // 이 검사가 없으면 서버가 꺼져 있어도 전 파일이 조용히 error 처리되고
@@ -124,7 +181,7 @@ function findConfigFiles(dir, fileList = []) {
         const filePath = path.join(dir, file);
         const stat = fs.statSync(filePath);
         if (stat.isDirectory()) {
-            if (file !== 'node_modules' && file !== '.git' && file !== 'dist' && file !== 'target' && file !== 'build' && file !== 'bin') {
+            if (!IGNORED_DIRS.has(file)) {
                 findConfigFiles(filePath, fileList);
             }
         } else {
@@ -142,6 +199,7 @@ function getAllFiles(dirPath, arrayOfFiles = []) {
     files.forEach((file) => {
         const fullPath = path.join(dirPath, file);
         if (fs.statSync(fullPath).isDirectory()) {
+            if (IGNORED_DIRS.has(file)) return;
             getAllFiles(fullPath, arrayOfFiles);
         } else {
             const ext = path.extname(fullPath).toLowerCase();
@@ -482,23 +540,43 @@ async function runReview() {
         const kstTime = new Date(new Date().getTime() + 9 * 60 * 60 * 1000).toISOString().replace('Z', '+09:00');
         const finalReport = { analyzedAt: kstTime, framework: frameworkContext, vulnerabilities: existingVulnerabilities };
         // 대상 파일 필터링 (보안 분석에 의미 없는 확장자 제외)
-        const validExtensions = ['.java', '.jsp', '.sql'];
-        let targetSrcFiles = allFiles.filter(file => {
-            const ext = path.extname(file).toLowerCase();
-            if (!validExtensions.includes(ext)) return false;
-            if (!REQUIRE_MAIN_PATH) return true;
-            return path.relative(TARGET_DIR, file).split(path.sep).includes('main');
-        });
+        // main 디렉터리 유무에 따라 필터 정책을 분기합니다.
+        const layoutInfo = detectProjectLayout(allFiles);
+        const { requireMain, candidates } = layoutInfo;
+        logger.info(`프로젝트 구조 판별: ${layoutInfo.layout} / 소스 후보 ${candidates.length}개 (main 하위 ${layoutInfo.mainFiles.length}개, main 밖 ${layoutInfo.outsideMain}개)`);
+
+        let targetSrcFiles;
+        if (requireMain) {
+            // [CASE A] main 디렉터리가 있는 표준 구조: src/main/** 만 분석 (테스트 코드는 자연히 제외)
+            targetSrcFiles = layoutInfo.mainFiles;
+            logger.info(`표준 구조(Maven/Gradle)로 판단하여 경로에 'main' 이 포함된 파일만 분석합니다.`);
+            if (layoutInfo.outsideMain > 0) {
+                logger.warn(`main 밖의 소스 ${layoutInfo.outsideMain}개는 제외되었습니다. 전체를 분석하려면 REQUIRE_MAIN_PATH=0 으로 실행하세요.`);
+            }
+        } else {
+            // [CASE B] main 디렉터리가 없는 레거시 구조: 전체 소스를 분석
+            targetSrcFiles = candidates;
+            logger.info(`레거시 구조(src/com/..., WebContent/ 등)로 판단하여 전체 소스를 분석합니다.`);
+            if (EXCLUDE_TEST_PATHS) {
+                const before = targetSrcFiles.length;
+                targetSrcFiles = targetSrcFiles.filter(f => !isTestPath(f));
+                const removed = before - targetSrcFiles.length;
+                if (removed > 0) {
+                    logger.info(`테스트 코드로 보이는 파일 ${removed}개를 제외했습니다. (포함하려면 EXCLUDE_TEST_PATHS=0)`);
+                }
+            }
+        }
 
         // [FIX] 0개일 때 조용히 "정상 완료"로 끝나면 취약점이 없는 것으로 오인됩니다.
         if (targetSrcFiles.length === 0) {
-            const candidates = allFiles.filter(f => validExtensions.includes(path.extname(f).toLowerCase()));
             logger.error('분석 대상 파일이 0개입니다. 리포트를 생성하지 않고 종료합니다.');
-            if (REQUIRE_MAIN_PATH && candidates.length > 0) {
-                logger.error(`.java/.jsp/.sql 파일 ${candidates.length}개가 있지만 경로에 'main' 디렉터리가 없어 모두 제외되었습니다.`);
-                logger.error("레거시 구조(src/com/..., WebContent/ 등)라면 REQUIRE_MAIN_PATH=0 으로 설정하고 다시 실행하세요.");
-            } else {
+            if (candidates.length === 0) {
                 logger.error(`TARGET_DIR('${TARGET_DIR}') 안에 .java/.jsp/.sql 파일이 있는지 확인하세요.`);
+            } else if (requireMain) {
+                logger.error(`.java/.jsp/.sql 파일 ${candidates.length}개가 있지만 경로에 'main' 디렉터리가 없어 모두 제외되었습니다.`);
+                logger.error('REQUIRE_MAIN_PATH 를 지우거나(auto) 0 으로 설정하고 다시 실행하세요.');
+            } else {
+                logger.error(`.java/.jsp/.sql 파일 ${candidates.length}개가 모두 테스트 경로로 판단되어 제외되었습니다. EXCLUDE_TEST_PATHS=0 으로 실행해 보세요.`);
             }
             process.exitCode = 1;
             return;
